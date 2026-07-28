@@ -199,10 +199,14 @@ class RoboxPrinterDevice(PrinterOutputDevice):
                     except Exception as e:
                         Logger.log("d", f"Filament detect: {e}")
 
-                    # Preheat
+                    # Preheat - set BOTH standard and first-layer temps
                     try: self._proto.execute_gcode(f"M104 S{nozzle_temp}")
                     except: pass
+                    try: self._proto.execute_gcode(f"M103 S{nozzle_temp}")
+                    except: pass
                     try: self._proto.execute_gcode(f"M140 S{bed_temp}")
+                    except: pass
+                    try: self._proto.execute_gcode(f"M139 S{bed_temp}")
                     except: pass
                     if self._printers:
                         p = self._printers[0]

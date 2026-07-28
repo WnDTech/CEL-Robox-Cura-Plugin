@@ -180,14 +180,17 @@ class PostProcessor:
         lines.append(f"; Nozzle0: {self.use_nozzle0}, Nozzle1: {self.use_nozzle1}")
         lines.append("")
 
-        # Before-print macros
-        lines.extend(mac.get_before_print())
+        # Set temperatures BEFORE macros so M139/M103 use the correct values
+        # M139 = first layer bed temp, M140 = standard bed temp
+        # M103 = first layer nozzle temp, M104 = standard nozzle temp
+        lines.append(f"M140 S{self.bed_temp}")
+        lines.append(f"M139 S{self.bed_temp}")
+        lines.append(f"M104 S{self.nozzle_temp}")
+        lines.append(f"M103 S{self.nozzle_temp}")
         lines.append("")
 
-        # Set temperatures from user's selected profile (M104/M140 from Cura
-        # come after the macro, so inject them here to take effect immediately)
-        lines.append(f"M104 S{self.nozzle_temp}")
-        lines.append(f"M140 S{self.bed_temp}")
+        # Before-print macros (now M139/M103 will use the values we just set)
+        lines.extend(mac.get_before_print())
         lines.append("")
 
         # Track tool state for nozzle open/close
