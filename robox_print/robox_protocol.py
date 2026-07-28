@@ -251,6 +251,20 @@ class RoboxProtocol:
         self._drain()
         return resp_data.decode("ascii", errors="replace").strip()
 
+    def get_filament_status(self):
+        """Check which extruder slots have filament. Returns dict with slot0/slot1 presence."""
+        resp = self.execute_gcode("M119", timeout=2)
+        result = {"slot0_d": False, "slot1_e": False}
+        if not resp:
+            return result
+        # Parse: M119 X:1 Y:1 Z:0 Z+:0 E:1 D:1 B:0 Eindex:0 Dindex:0
+        for part in resp.replace("\r\n", " ").replace("\n", " ").split():
+            if part.startswith("D:"):
+                result["slot0_d"] = part[2:] == "1"
+            elif part.startswith("E:"):
+                result["slot1_e"] = part[2:] == "1"
+        return result
+
     def get_temperatures(self):
         """Get temperatures via M105. Returns dict or None on timeout."""
         resp = self.execute_gcode("M105", timeout=0.5)

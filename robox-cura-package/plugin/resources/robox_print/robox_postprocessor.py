@@ -191,7 +191,8 @@ class PostProcessor:
         lines.append("")
 
         # Track tool state for nozzle open/close
-        current_tool = None
+        # Default to tool 0 (D extruder) for single-material prints
+        current_tool = 0 if not self.use_nozzle1 or self.use_nozzle0 else 1
         first_tool = True
 
         for raw_line in input_gcode.split("\n"):

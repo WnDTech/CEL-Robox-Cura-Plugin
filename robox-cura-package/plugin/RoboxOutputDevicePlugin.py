@@ -194,12 +194,40 @@ class RoboxPrinterDevice(PrinterOutputDevice):
                     except: pass
                     try: self._proto.execute_gcode("G28 B")
                     except: pass
-                    # Preheat printer immediately so the user can see correct temps
+
+                    # Auto-detect filament slot
+                    try:
+                        filament = self._proto.get_filament_status()
+                        Logger.log("i", f"Filament: D(slot0)={filament['slot0_d']} E(slot1)={filament['slot1_e']}")
+                        if filament["slot0_d"] and not filament["slot1_e"]:
+                            Logger.log("i", "Using nozzle 0 (D extruder, slot 0)")
+                        elif filament["slot1_e"] and not filament["slot0_d"]:
+                            Logger.log("i", "Using nozzle 1 (E extruder, slot 1)")
+                            # Re-process G-code with nozzle 1
+                            pp2 = robox_postprocessor.PostProcessor(
+                                common, head_type=head_type,
+                                use_nozzle0=False, use_nozzle1=True,
+                                nozzle0_diameter=nozzle_size,
+                                nozzle_temp=nozzle_temp,
+                                bed_temp=bed_temp
+                            )
+                            processed = pp2.process(gcode)
+                            gcode_lines = [l.strip() for l in processed.split("\n")
+                                           if l.strip() and not l.strip().startswith(";") and not l.strip().startswith("#")]
+                            self._total_lines = len(gcode_lines)
+                            Logger.log("i", f"Re-processed for nozzle 1: {self._total_lines} lines")
+                        elif filament["slot0_d"] and filament["slot1_e"]:
+                            Logger.log("i", "Both slots have filament - using nozzle 0 (D extruder)")
+                        else:
+                            Logger.log("w", "No filament detected in either slot")
+                    except Exception as e:
+                        Logger.log("d", f"Filament detect: {e}")
+
+                    # Preheat
                     try: self._proto.execute_gcode(f"M104 S{nozzle_temp}")
                     except: pass
                     try: self._proto.execute_gcode(f"M140 S{bed_temp}")
                     except: pass
-                    # Update printer model targets immediately so Cura UI shows correct temps
                     if self._printers:
                         p = self._printers[0]
                         ex = p.extruders
