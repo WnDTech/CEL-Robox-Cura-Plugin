@@ -267,7 +267,7 @@ class RoboxProtocol:
 
     def get_temperatures(self):
         """Get temperatures via M105. Returns dict or None on timeout."""
-        resp = self.execute_gcode("M105", timeout=0.5)
+        resp = self.execute_gcode("M105", timeout=0.2)
         if resp is None:
             return None
         temps = {"n0": 0, "n1": 0, "bed": 0, "chamber": 0, "ambient": 0,
@@ -414,3 +414,4 @@ class StatusResponse:
     def __repr__(self):
         return (f"ST(T={self.temp_nozzle0}/{self.temp_nozzle1}C "
                 f"Bed={self.temp_bed}C Line={self.print_line_number})")
+

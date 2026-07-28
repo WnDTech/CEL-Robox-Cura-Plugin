@@ -75,7 +75,7 @@ class RoboxPrinterDevice(PrinterOutputDevice):
         if self._monitor_timer:
             return
         self._monitor_timer = QTimer()
-        self._monitor_timer.setInterval(2000)
+        self._monitor_timer.setInterval(3000)
         self._monitor_timer.timeout.connect(self._update_monitor)
         self._monitor_timer.start()
 
@@ -492,3 +492,6 @@ class RoboxOutputDevicePlugin(QObject, OutputDevicePlugin):
         self._check_updates = False
         if self._device:
             self._device.close()
+
+
+
