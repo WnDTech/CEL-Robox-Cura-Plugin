@@ -129,7 +129,26 @@ class RoboxPrinterDevice(PrinterOutputDevice):
         if stack:
             nozzle_temp = stack.getProperty("material_print_temperature", "value") or 210
             bed_temp = stack.getProperty("material_bed_temperature", "value") or 60
-            material_name = stack.getProperty("material_type", "value") or "PLA"
+            # Try to get material name from extruder container metadata
+material_name = "PLA"
+try:
+    extruder = stack.extruders[0] if hasattr(stack, 'extruders') else stack.extruderList[0]
+    mat = extruder.material
+    material_name = mat.getMetaDataEntry("material", "PLA")
+except Exception:
+    material_name = "PLA"
+                try:
+                    extruder = stack.extruders[0] if hasattr(stack, 'extruders') else stack.extruderList[0]
+                    mat = extruder.material
+                    material_name = mat.getMetaDataEntry("material", "PLA")
+                except Exception:
+                    material_name = "PLA"
+                try:
+                    extruder = stack.extruders[0] if hasattr(stack, "extruders") else stack.extruderList[0]
+                    mat = extruder.material
+                    material_name = mat.getMetaDataEntry("material", "PLA")
+                except Exception:
+                    material_name = stack.getProperty("material_type", "value") or "PLA"
 
         # Material-specific recommendations
         mat = material_name.upper()
@@ -182,7 +201,26 @@ class RoboxPrinterDevice(PrinterOutputDevice):
                 nozzle_temp = stack.getProperty("material_print_temperature", "value") or 210
                 bed_temp = stack.getProperty("material_bed_temperature", "value") or 60
                 nozzle_size = stack.getProperty("machine_nozzle_size", "value") or 0.4
-                material_name = stack.getProperty("material_type", "value") or "PLA"
+                # Try to get material name from extruder container metadata
+material_name = "PLA"
+try:
+    extruder = stack.extruders[0] if hasattr(stack, 'extruders') else stack.extruderList[0]
+    mat = extruder.material
+    material_name = mat.getMetaDataEntry("material", "PLA")
+except Exception:
+    material_name = "PLA"
+                try:
+                    extruder = stack.extruders[0] if hasattr(stack, 'extruders') else stack.extruderList[0]
+                    mat = extruder.material
+                    material_name = mat.getMetaDataEntry("material", "PLA")
+                except Exception:
+                    material_name = "PLA"
+                try:
+                    extruder = stack.extruders[0] if hasattr(stack, "extruders") else stack.extruderList[0]
+                    mat = extruder.material
+                    material_name = mat.getMetaDataEntry("material", "PLA")
+                except Exception:
+                    material_name = stack.getProperty("material_type", "value") or "PLA"
 
             # Material advisory
             if bed_temp >= 80:
@@ -545,6 +583,7 @@ class RoboxOutputDevicePlugin(QObject, OutputDevicePlugin):
         self._check_updates = False
         if self._device:
             self._device.close()
+
 
 
 
