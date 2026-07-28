@@ -107,17 +107,42 @@ class RoboxPrinterDevice(PrinterOutputDevice):
         if self._is_printing:
             Message(text="Already printing", title="Robox").show()
             return
-        self._stop_monitor()
-        self.writeStarted.emit(self)
-        CuraApplication.getInstance().getController().setActiveStage("MonitorStage")
+
+        # Generate G-code and save for later (don't print yet)
         gcode_textio = StringIO()
         gcode_writer = cast(MeshWriter, PluginRegistry.getInstance().getPluginObject("GCodeWriter"))
         if not gcode_writer.write(gcode_textio, None):
             Message(text="Failed to generate G-code", title="Robox",
                     message_type=Message.MessageType.ERROR).show()
             return
-        # Run on main thread to avoid all Qt threading issues
-        self._run_print(gcode_textio.getvalue())
+
+        self._pending_gcode = gcode_textio.getvalue()
+
+        # Switch to Monitor tab — user reviews temps, then clicks Send to Printer
+        CuraApplication.getInstance().getController().setActiveStage("MonitorStage")
+
+        # Show material info
+        stack = CuraApplication.getInstance().getGlobalContainerStack()
+        nozzle_temp = 210
+        bed_temp = 60
+        material_name = "PLA"
+        if stack:
+            nozzle_temp = stack.getProperty("material_print_temperature", "value") or 210
+            bed_temp = stack.getProperty("material_bed_temperature", "value") or 60
+            material_name = stack.getProperty("material", "value") or "PLA"
+
+        warnings = []
+        if bed_temp >= 80:
+            warnings.append("High bed temp — ensure clean bed, no drafts, door closed")
+        if nozzle_temp >= 240:
+            warnings.append("High nozzle temp — ensure good ventilation")
+
+        msg = f"Material: {material_name}\nNozzle: {nozzle_temp}C  Bed: {bed_temp}C"
+        if warnings:
+            msg += "\n\n" + "\n".join(warnings)
+        msg += "\n\nReview settings in Monitor tab, then click Send to Printer."
+
+        Message(text=msg, title="Robox - Ready to Print").show()
 
     def _run_print(self, gcode):
         self._is_printing = True
@@ -341,25 +366,27 @@ class RoboxPrinterDevice(PrinterOutputDevice):
 
     @pyqtSlot(str)
     def sendCommand(self, command: str) -> None:
-        if self._proto:
-            try:
-                cmd_upper = command.strip().upper()
-                if cmd_upper == "PRINT":
-                    if self._pending_gcode and not self._is_printing:
-                        self._run_print(self._pending_gcode)
-                        self._pending_gcode = None
-                    return
-                if cmd_upper in ("COOLDOWN",):
-                    self._proto.execute_gcode("M104 S0")
-                    self._proto.execute_gcode("M140 S0")
-                    self._proto.clear_errors()
-                    return
-                if any(cmd_upper.startswith(p) for p in ("G0", "G1", "G28", "G37", "G91", "G90")):
-                    try: self._proto.execute_gcode("G28 B")
-                    except: pass
-                self._proto.execute_gcode(command)
-            except Exception as e:
-                Logger.log("d", f"Robox sendCommand: {e}")
+        try:
+            cmd_upper = command.strip().upper()
+            if cmd_upper == "PRINT":
+                if self._pending_gcode and not self._is_printing:
+                    self.writeStarted.emit(self)
+                    self._run_print(self._pending_gcode)
+                    self._pending_gcode = None
+                return
+            if not self._proto:
+                return
+            if cmd_upper in ("COOLDOWN",):
+                self._proto.execute_gcode("M104 S0")
+                self._proto.execute_gcode("M140 S0")
+                self._proto.clear_errors()
+                return
+            if any(cmd_upper.startswith(p) for p in ("G0", "G1", "G28", "G37", "G91", "G90")):
+                try: self._proto.execute_gcode("G28 B")
+                except: pass
+            self._proto.execute_gcode(command)
+        except Exception as e:
+            Logger.log("d", f"Robox sendCommand: {e}")
 
     def _update_printer_model_temps(self, t):
         """Update Cura's printer model with current temperatures."""
