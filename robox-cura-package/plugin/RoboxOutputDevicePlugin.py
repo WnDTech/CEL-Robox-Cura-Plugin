@@ -189,6 +189,8 @@ class RoboxPrinterDevice(PrinterOutputDevice):
             pass
 
     def _update_printer_model_temps(self, t):
+        """Update Cura's printer model with current temperatures only.
+        Target temps come from Cura's profile (set during preheat), not M105."""
         try:
             if not self._printers:
                 return
@@ -198,19 +200,10 @@ class RoboxPrinterDevice(PrinterOutputDevice):
             extruders = printer.extruders
             if extruders and len(extruders) > 0 and extruders[0]:
                 extruders[0].updateHotendTemperature(float(t.get("n0", 0)))
-                tn0 = t.get("target_n0")
-                if tn0 is not None:
-                    extruders[0].updateTargetHotendTemperature(float(tn0))
             if extruders and len(extruders) > 1 and extruders[1]:
                 extruders[1].updateHotendTemperature(float(t.get("n1", 0)))
-                tn1 = t.get("target_n1")
-                if tn1 is not None:
-                    extruders[1].updateTargetHotendTemperature(float(tn1))
             if printer:
                 printer.updateBedTemperature(float(t.get("bed", 0)))
-                tb = t.get("target_bed")
-                if tb is not None:
-                    printer.updateTargetBedTemperature(float(tb))
         except Exception:
             pass
 
