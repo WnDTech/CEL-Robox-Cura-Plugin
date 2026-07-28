@@ -43,7 +43,7 @@ class RoboxPrinterDevice(PrinterOutputDevice):
         self._port = port
         self._is_printing = False
         self._proto = None
-        self._accepts_commands = True
+        self._accepts_commands = True`r`n        self._pending_gcode = None
         self.acceptsCommandsChanged.emit()
         self._total_lines = 0
         self._current_temps = {"n0": 0, "n1": 0, "bed": 0}
@@ -343,6 +343,11 @@ class RoboxPrinterDevice(PrinterOutputDevice):
         if self._proto:
             try:
                 cmd_upper = command.strip().upper()
+                if cmd_upper == "PRINT":
+                    if self._pending_gcode and not self._is_printing:
+                        self._run_print(self._pending_gcode)
+                        self._pending_gcode = None
+                    return
                 if cmd_upper in ("COOLDOWN",):
                     self._proto.execute_gcode("M104 S0")
                     self._proto.execute_gcode("M140 S0")
@@ -492,6 +497,8 @@ class RoboxOutputDevicePlugin(QObject, OutputDevicePlugin):
         self._check_updates = False
         if self._device:
             self._device.close()
+
+
 
 
 
