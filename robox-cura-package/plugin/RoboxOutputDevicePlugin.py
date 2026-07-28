@@ -136,6 +136,19 @@ class RoboxPrinterDevice(PrinterOutputDevice):
                 nozzle_temp = stack.getProperty("material_print_temperature", "value") or 210
                 bed_temp = stack.getProperty("material_bed_temperature", "value") or 60
                 nozzle_size = stack.getProperty("machine_nozzle_size", "value") or 0.4
+                material_name = stack.getProperty("material", "value") or "PLA"
+
+            # Material advisory
+            if bed_temp >= 80:
+                Message(
+                    text=f"Printing {material_name}: nozzle {nozzle_temp}C / bed {bed_temp}C - ensure clean bed, no drafts, door closed.",
+                    title="Robox - Material Advisory"
+                ).show()
+            elif nozzle_temp >= 240:
+                Message(
+                    text=f"Printing {material_name}: nozzle {nozzle_temp}C / bed {bed_temp}C - high temp, ensure good ventilation.",
+                    title="Robox - Material Advisory"
+                ).show()
 
             # Default to single material head. Dual material only with 2 extruders.
             head_type = "RBX01-SM"
