@@ -1,0 +1,2 @@
+@"C:\Program Files\BellSoft\LibericaJDK-11-Full\bin\java.exe" "-DlibertySystems.configFile=C:\Users\paul_\Documents\CEL Robox\AutoMaker\AutoMaker.configFile.xml" -jar "C:\Users\paul_\Documents\CEL Robox\AutoMaker\AutoMaker.jar"
+pause

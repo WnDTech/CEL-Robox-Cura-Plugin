@@ -1,0 +1,8 @@
+{
+    "name": "CEL Robox",
+    "author": "CEL-UK / Community",
+    "version": "1.0.0",
+    "description": "Adds CEL Robox printer support to Cura. Includes USB printing with binary protocol support.",
+    "api": 8,
+    "i18n-catalog": "cura"
+}
