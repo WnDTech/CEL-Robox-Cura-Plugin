@@ -9,7 +9,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "res
 from robox_protocol import RoboxProtocol, RoboxError, RoboxConnectionError
 import serial.tools.list_ports
 
-from PyQt6.QtCore import QObject, QTimer, pyqtSignal
+from PyQt6.QtCore import QObject, QTimer, pyqtSignal, pyqtSlot
 
 from UM.i18n import i18nCatalog
 from UM.Logger import Logger
@@ -298,6 +298,7 @@ class RoboxPrinterDevice(PrinterOutputDevice):
         finally:
             self._is_printing = False
 
+    @pyqtSlot(str)
     def sendCommand(self, command: str) -> None:
         if self._proto:
             try:
