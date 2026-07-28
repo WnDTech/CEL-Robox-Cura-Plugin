@@ -131,15 +131,35 @@ class RoboxPrinterDevice(PrinterOutputDevice):
             bed_temp = stack.getProperty("material_bed_temperature", "value") or 60
             material_name = stack.getProperty("material", "value") or "PLA"
 
-        warnings = []
-        if bed_temp >= 80:
-            warnings.append("High bed temp — ensure clean bed, no drafts, door closed")
-        if nozzle_temp >= 240:
-            warnings.append("High nozzle temp — ensure good ventilation")
+        # Material-specific recommendations
+        mat = material_name.upper()
+        tips = []
+        if "ABS" in mat:
+            tips.append("Enclosure required — prevents warping")
+            tips.append("No drafts — keep door closed during print")
+            tips.append("Good ventilation — ABS fumes are harmful")
+        elif "ASA" in mat:
+            tips.append("Enclosure recommended — UV resistant outdoor parts")
+            tips.append("Good ventilation — similar to ABS")
+        elif "PETG" in mat:
+            tips.append("Print slower than PLA for best adhesion")
+            tips.append("Keep door closed to maintain stable temp")
+        elif "PA" in mat or "NYLON" in mat:
+            tips.append("Keep filament dry — nylon absorbs moisture")
+            tips.append("Enclosure recommended to prevent warping")
+        elif "PC" in mat:
+            tips.append("Enclosure required — high shrinkage")
+            tips.append("Good ventilation — fumes at high temp")
+        elif "TPU" in mat:
+            tips.append("Print slowly (20-30mm/s) for flexible parts")
+            tips.append("Direct drive recommended over Bowden")
+        elif "PLA" in mat:
+            tips.append("Easiest material — no enclosure needed")
+            tips.append("Open door is fine for PLA")
 
         msg = f"Material: {material_name}\nNozzle: {nozzle_temp}C  Bed: {bed_temp}C"
-        if warnings:
-            msg += "\n\n" + "\n".join(warnings)
+        if tips:
+            msg += "\n\n" + "\n".join(tips)
         msg += "\n\nReview settings in Monitor tab, then click Send to Printer."
 
         Message(text=msg, title="Robox - Ready to Print").show()
