@@ -258,7 +258,8 @@ class RoboxPrinterDevice(PrinterOutputDevice):
             Logger.log("i", f"Robox print started: {seq+1} chunks")
 
             if self._printers:
-                job = PrintJobOutputModel(output_controller=None, name="CEL Robox")
+                controller = self._printers[0].getController()
+                job = PrintJobOutputModel(output_controller=controller, name="CEL Robox")
                 job.updateState("printing")
                 job.updateTimeElapsed(0)
                 self._printers[0].updateActivePrintJob(job)
