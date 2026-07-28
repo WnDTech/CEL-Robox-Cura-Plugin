@@ -24,8 +24,27 @@ Component
                 anchors.top: parent.top
                 anchors.left: parent.left
                 anchors.right: parent.right
-                anchors.bottom: coolDownButton.top
+                anchors.bottom: printButton.top
                 anchors.bottomMargin: UM.Theme.getSize("thick_margin").height
+            }
+
+            Cura.SecondaryButton
+            {
+                id: printButton
+                anchors.bottom: coolDownButton.top
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.leftMargin: UM.Theme.getSize("default_margin").width
+                anchors.rightMargin: UM.Theme.getSize("default_margin").width
+                anchors.bottomMargin: UM.Theme.getSize("default_margin").height
+                text: "Send to Printer"
+                visible: Cura.MachineManager.printerOutputDevices.length > 0
+                onClicked: {
+                    var device = Cura.MachineManager.printerOutputDevices[0]
+                    if (device) {
+                        device.sendCommand("PRINT")
+                    }
+                }
             }
 
             Cura.SecondaryButton
