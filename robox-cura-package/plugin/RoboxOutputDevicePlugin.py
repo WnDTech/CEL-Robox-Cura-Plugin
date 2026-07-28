@@ -86,31 +86,7 @@ class RoboxPrinterDevice(PrinterOutputDevice):
             t = self._proto.get_temperatures()
             if t:
                 self._current_temps = t
-        except Exception:
-            pass
-
-        try:
-            if not self._printers:
-                return
-            printer = self._printers[0]
-            if not printer:
-                return
-            extruders = printer.extruders
-            if extruders and len(extruders) > 0 and extruders[0]:
-                extruders[0].updateHotendTemperature(float(self._current_temps.get("n0", 0)))
-                tn0 = self._current_temps.get("target_n0")
-                if tn0 is not None:
-                    extruders[0].updateTargetHotendTemperature(float(tn0))
-            if extruders and len(extruders) > 1 and extruders[1]:
-                extruders[1].updateHotendTemperature(float(self._current_temps.get("n1", 0)))
-                tn1 = self._current_temps.get("target_n1")
-                if tn1 is not None:
-                    extruders[1].updateTargetHotendTemperature(float(tn1))
-            if printer:
-                printer.updateBedTemperature(float(self._current_temps.get("bed", 0)))
-                tb = self._current_temps.get("target_bed")
-                if tb is not None:
-                    printer.updateTargetBedTemperature(float(tb))
+                self._update_printer_model_temps(t)
         except Exception:
             pass
 
@@ -285,6 +261,52 @@ class RoboxPrinterDevice(PrinterOutputDevice):
 
             self.writeFinished.emit(self)
 
+            # Monitor heating/progress while keeping UI responsive
+            # Use processEvents to keep Cura responsive during heating
+            print_start = time.time()
+            app = CuraApplication.getInstance()
+            last_line = 0
+            stable_count = 0
+            for _ in range(300):  # Max 10 minutes monitoring
+                try:
+                    t = self._proto.get_temperatures()
+                    if t:
+                        self._current_temps = t
+                        self._update_printer_model_temps(t)
+                except Exception:
+                    pass
+
+                # Update elapsed time on the print job
+                try:
+                    if self._printers and hasattr(self._printers[0], '_active_print_job') and self._printers[0]._active_print_job:
+                        elapsed = int(time.time() - print_start)
+                        self._printers[0]._active_print_job.updateTimeElapsed(elapsed)
+                except Exception:
+                    pass
+
+                # Check if print completed (line number stopped changing)
+                try:
+                    s = self._proto.get_status()
+                    if s.print_line_number > 0:
+                        if s.print_line_number == last_line:
+                            stable_count += 1
+                        else:
+                            stable_count = 0
+                        last_line = s.print_line_number
+                    if stable_count > 10:  # 20 seconds stable = print done
+                        Logger.log("i", f"Robox print completed at line {last_line}")
+                        break
+                except Exception:
+                    pass
+
+                # Keep UI responsive
+                if app:
+                    app.processEvents()
+                time.sleep(2)
+
+            # After monitoring loop, restart QTimer for ongoing temp display
+            self._start_monitor()
+
         except RoboxError as e:
             err = str(e)
             Logger.log("e", f"Robox print failed: {err}")
@@ -314,6 +336,33 @@ class RoboxPrinterDevice(PrinterOutputDevice):
                 self._proto.execute_gcode(command)
             except Exception as e:
                 Logger.log("d", f"Robox sendCommand: {e}")
+
+    def _update_printer_model_temps(self, t):
+        """Update Cura's printer model with current temperatures."""
+        try:
+            if not self._printers:
+                return
+            printer = self._printers[0]
+            if not printer:
+                return
+            extruders = printer.extruders
+            if extruders and len(extruders) > 0 and extruders[0]:
+                extruders[0].updateHotendTemperature(float(t.get("n0", 0)))
+                tn0 = t.get("target_n0")
+                if tn0 is not None:
+                    extruders[0].updateTargetHotendTemperature(float(tn0))
+            if extruders and len(extruders) > 1 and extruders[1]:
+                extruders[1].updateHotendTemperature(float(t.get("n1", 0)))
+                tn1 = t.get("target_n1")
+                if tn1 is not None:
+                    extruders[1].updateTargetHotendTemperature(float(tn1))
+            if printer:
+                printer.updateBedTemperature(float(t.get("bed", 0)))
+                tb = t.get("target_bed")
+                if tb is not None:
+                    printer.updateTargetBedTemperature(float(tb))
+        except Exception:
+            pass
 
     def _stop_monitor(self):
         if self._monitor_timer:
