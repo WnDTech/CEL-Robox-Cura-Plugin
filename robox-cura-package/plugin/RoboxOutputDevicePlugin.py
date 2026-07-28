@@ -2,6 +2,7 @@ import os
 import sys
 import threading
 import time
+import re
 from io import StringIO
 from typing import List, Optional, cast, TYPE_CHECKING
 
@@ -32,7 +33,85 @@ ROBOX_VID = 0x16D0
 ROBOX_PID = 0x081B
 
 
+def get_material_info(stack):
+    """Read material name and temperatures from Cura's active profile."""
+    nozzle_temp = 210
+    bed_temp = 60
+    material_name = "PLA"
+    if not stack:
+        return nozzle_temp, bed_temp, material_name
+    try:
+        nozzle_temp = stack.getProperty("material_print_temperature", "value") or 210
+        bed_temp = stack.getProperty("material_bed_temperature", "value") or 60
+    except Exception:
+        pass
+    try:
+        extruders = getattr(stack, "extruders", None)
+        if extruders is None:
+            extruders = getattr(stack, "extruderList", [])
+        if extruders:
+            mat = extruders[0].material
+            if mat:
+                material_name = mat.getMetaDataEntry("material", "PLA")
+    except Exception:
+        try:
+            material_name = stack.getProperty("material_type", "value") or "PLA"
+        except Exception:
+            material_name = "PLA"
+    return nozzle_temp, bed_temp, material_name
+
+
+def build_advisory(nozzle_temp, bed_temp, material_name):
+    """Build material-specific advisory text."""
+    mat = material_name.upper()
+    if not mat or mat in ("EMPTY", "GENERIC", ""):
+        if nozzle_temp >= 260 or bed_temp >= 100:
+            mat = "PC"
+        elif nozzle_temp >= 240 or bed_temp >= 85:
+            mat = "ABS"
+        elif nozzle_temp >= 230 or bed_temp >= 75:
+            mat = "PETG"
+        elif nozzle_temp >= 220 and bed_temp >= 70:
+            mat = "PETG"
+        elif nozzle_temp >= 220:
+            mat = "TPU"
+        else:
+            mat = "PLA"
+
+    tips = []
+    if "ABS" in mat:
+        tips.append("Enclosure required - prevents warping")
+        tips.append("No drafts - keep door closed")
+        tips.append("Good ventilation - ABS fumes harmful")
+    elif "ASA" in mat:
+        tips.append("Enclosure recommended - UV resistant")
+        tips.append("Good ventilation")
+    elif "PETG" in mat:
+        tips.append("Print slower than PLA")
+        tips.append("Keep door closed for stable temp")
+    elif "PA" in mat or "NYLON" in mat:
+        tips.append("Keep filament dry - absorbs moisture")
+        tips.append("Enclosure recommended")
+    elif "PC" in mat:
+        tips.append("Enclosure required - high shrinkage")
+        tips.append("Good ventilation")
+    elif "TPU" in mat:
+        tips.append("Print slowly (20-30mm/s)")
+        tips.append("Direct drive recommended")
+    else:
+        mat = "PLA"
+        tips.append("No enclosure needed - open door OK")
+
+    msg = f"Material: {mat}\nNozzle: {nozzle_temp}C  Bed: {bed_temp}C"
+    if tips:
+        msg += "\n\n" + "\n".join(tips)
+    return msg
+
+
 class RoboxPrinterDevice(PrinterOutputDevice):
+    updateTemps = pyqtSignal(dict)
+    updateProgressSignal = pyqtSignal(int, int)
+
     def __init__(self, port):
         super().__init__(port, connection_type=ConnectionType.UsbConnection)
         self.setName("CEL Robox")
@@ -45,11 +124,11 @@ class RoboxPrinterDevice(PrinterOutputDevice):
         self._proto = None
         self._accepts_commands = True
         self._pending_gcode = None
-        self.acceptsCommandsChanged.emit()
         self._total_lines = 0
         self._current_temps = {"n0": 0, "n1": 0, "bed": 0}
         self._current_line = 0
         self._monitor_timer = None
+        self._print_start_time = 0
 
         # Setup monitor view
         qml_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "MonitorItem.qml")
@@ -60,17 +139,30 @@ class RoboxPrinterDevice(PrinterOutputDevice):
         try:
             self._proto = RoboxProtocol()
             self._proto.connect(self._port)
-            # Ensure heaters are off on connection (safety)
-            try: self._proto.execute_gcode("M104 S0")
-            except: pass
-            try: self._proto.execute_gcode("M140 S0")
-            except: pass
+            try:
+                self._proto.execute_gcode("M104 S0")
+            except Exception:
+                pass
+            try:
+                self._proto.execute_gcode("M140 S0")
+            except Exception:
+                pass
             self._init_printer_model()
             self._start_monitor()
             self.setConnectionState(ConnectionState.Connected)
         except Exception as e:
             Logger.log("d", f"Robox connect failed: {e}")
             self.setConnectionState(ConnectionState.Disconnected)
+
+    def _init_printer_model(self):
+        container_stack = CuraApplication.getInstance().getGlobalContainerStack()
+        extruders = 1
+        if container_stack:
+            extruders = container_stack.getProperty("machine_extruder_count", "value") or 1
+        controller = GenericOutputController(self)
+        self._printers = [PrinterOutputModel(output_controller=controller, number_of_extruders=extruders)]
+        if container_stack:
+            self._printers[0].updateName(container_stack.getName())
 
     def _start_monitor(self):
         if self._monitor_timer:
@@ -79,6 +171,11 @@ class RoboxPrinterDevice(PrinterOutputDevice):
         self._monitor_timer.setInterval(3000)
         self._monitor_timer.timeout.connect(self._update_monitor)
         self._monitor_timer.start()
+
+    def _stop_monitor(self):
+        if self._monitor_timer:
+            self._monitor_timer.stop()
+            self._monitor_timer = None
 
     def _update_monitor(self):
         try:
@@ -91,15 +188,31 @@ class RoboxPrinterDevice(PrinterOutputDevice):
         except Exception:
             pass
 
-    def _init_printer_model(self):
-        container_stack = CuraApplication.getInstance().getGlobalContainerStack()
-        extruders = 1
-        if container_stack:
-            extruders = container_stack.getProperty("machine_extruder_count", "value") or 1
-        controller = GenericOutputController(self)
-        self._printers = [PrinterOutputModel(output_controller=controller, number_of_extruders=extruders)]
-        if container_stack:
-            self._printers[0].updateName(container_stack.getName())
+    def _update_printer_model_temps(self, t):
+        try:
+            if not self._printers:
+                return
+            printer = self._printers[0]
+            if not printer:
+                return
+            extruders = printer.extruders
+            if extruders and len(extruders) > 0 and extruders[0]:
+                extruders[0].updateHotendTemperature(float(t.get("n0", 0)))
+                tn0 = t.get("target_n0")
+                if tn0 is not None:
+                    extruders[0].updateTargetHotendTemperature(float(tn0))
+            if extruders and len(extruders) > 1 and extruders[1]:
+                extruders[1].updateHotendTemperature(float(t.get("n1", 0)))
+                tn1 = t.get("target_n1")
+                if tn1 is not None:
+                    extruders[1].updateTargetHotendTemperature(float(tn1))
+            if printer:
+                printer.updateBedTemperature(float(t.get("bed", 0)))
+                tb = t.get("target_bed")
+                if tb is not None:
+                    printer.updateTargetBedTemperature(float(tb))
+        except Exception:
+            pass
 
     def requestWrite(self, nodes=None, file_name=None,
                      limit_mimetypes=False, file_handler=None,
@@ -108,7 +221,6 @@ class RoboxPrinterDevice(PrinterOutputDevice):
             Message(text="Already printing", title="Robox").show()
             return
 
-        # Generate G-code and save for later (don't print yet)
         gcode_textio = StringIO()
         gcode_writer = cast(MeshWriter, PluginRegistry.getInstance().getPluginObject("GCodeWriter"))
         if not gcode_writer.write(gcode_textio, None):
@@ -118,70 +230,14 @@ class RoboxPrinterDevice(PrinterOutputDevice):
 
         self._pending_gcode = gcode_textio.getvalue()
 
-        # Switch to Monitor tab — user reviews temps, then clicks Send to Printer
-        CuraApplication.getInstance().getController().setActiveStage("MonitorStage")
-
-        # Show material info
         stack = CuraApplication.getInstance().getGlobalContainerStack()
-        nozzle_temp = 210
-        bed_temp = 60
-        material_name = "PLA"
-        if stack:
-            nozzle_temp = stack.getProperty("material_print_temperature", "value") or 210
-            bed_temp = stack.getProperty("material_bed_temperature", "value") or 60
-            # Try to get material name from extruder container metadata
-material_name = "PLA"
-try:
-    extruder = stack.extruders[0] if hasattr(stack, 'extruders') else stack.extruderList[0]
-    mat = extruder.material
-    material_name = mat.getMetaDataEntry("material", "PLA")
-except Exception:
-    material_name = "PLA"
-                try:
-                    extruder = stack.extruders[0] if hasattr(stack, 'extruders') else stack.extruderList[0]
-                    mat = extruder.material
-                    material_name = mat.getMetaDataEntry("material", "PLA")
-                except Exception:
-                    material_name = "PLA"
-                try:
-                    extruder = stack.extruders[0] if hasattr(stack, "extruders") else stack.extruderList[0]
-                    mat = extruder.material
-                    material_name = mat.getMetaDataEntry("material", "PLA")
-                except Exception:
-                    material_name = stack.getProperty("material_type", "value") or "PLA"
+        nozzle_temp, bed_temp, material_name = get_material_info(stack)
 
-        # Material-specific recommendations
-        mat = material_name.upper()
-        tips = []
-        if "ABS" in mat:
-            tips.append("Enclosure required — prevents warping")
-            tips.append("No drafts — keep door closed during print")
-            tips.append("Good ventilation — ABS fumes are harmful")
-        elif "ASA" in mat:
-            tips.append("Enclosure recommended — UV resistant outdoor parts")
-            tips.append("Good ventilation — similar to ABS")
-        elif "PETG" in mat:
-            tips.append("Print slower than PLA for best adhesion")
-            tips.append("Keep door closed to maintain stable temp")
-        elif "PA" in mat or "NYLON" in mat:
-            tips.append("Keep filament dry — nylon absorbs moisture")
-            tips.append("Enclosure recommended to prevent warping")
-        elif "PC" in mat:
-            tips.append("Enclosure required — high shrinkage")
-            tips.append("Good ventilation — fumes at high temp")
-        elif "TPU" in mat:
-            tips.append("Print slowly (20-30mm/s) for flexible parts")
-            tips.append("Direct drive recommended over Bowden")
-        elif "PLA" in mat:
-            tips.append("Easiest material — no enclosure needed")
-            tips.append("Open door is fine for PLA")
+        advisory = build_advisory(nozzle_temp, bed_temp, material_name)
+        advisory += "\n\nReview settings in Monitor tab, then click Send to Printer."
 
-        msg = f"Material: {material_name}\nNozzle: {nozzle_temp}C  Bed: {bed_temp}C"
-        if tips:
-            msg += "\n\n" + "\n".join(tips)
-        msg += "\n\nReview settings in Monitor tab, then click Send to Printer."
-
-        Message(text=msg, title="Robox - Ready to Print").show()
+        CuraApplication.getInstance().getController().setActiveStage("MonitorStage")
+        Message(text=advisory, title="Robox - Ready to Print").show()
 
     def _run_print(self, gcode):
         self._is_printing = True
@@ -190,7 +246,6 @@ except Exception:
             common = os.path.join(os.environ.get("USERPROFILE", os.path.expanduser("~")),
                                   "Documents", "CEL Robox", "Common")
 
-            # Read material settings from Cura's active profile
             stack = CuraApplication.getInstance().getGlobalContainerStack()
             extruder_count = 1
             nozzle_temp = 210
@@ -201,40 +256,7 @@ except Exception:
                 nozzle_temp = stack.getProperty("material_print_temperature", "value") or 210
                 bed_temp = stack.getProperty("material_bed_temperature", "value") or 60
                 nozzle_size = stack.getProperty("machine_nozzle_size", "value") or 0.4
-                # Try to get material name from extruder container metadata
-material_name = "PLA"
-try:
-    extruder = stack.extruders[0] if hasattr(stack, 'extruders') else stack.extruderList[0]
-    mat = extruder.material
-    material_name = mat.getMetaDataEntry("material", "PLA")
-except Exception:
-    material_name = "PLA"
-                try:
-                    extruder = stack.extruders[0] if hasattr(stack, 'extruders') else stack.extruderList[0]
-                    mat = extruder.material
-                    material_name = mat.getMetaDataEntry("material", "PLA")
-                except Exception:
-                    material_name = "PLA"
-                try:
-                    extruder = stack.extruders[0] if hasattr(stack, "extruders") else stack.extruderList[0]
-                    mat = extruder.material
-                    material_name = mat.getMetaDataEntry("material", "PLA")
-                except Exception:
-                    material_name = stack.getProperty("material_type", "value") or "PLA"
 
-            # Material advisory
-            if bed_temp >= 80:
-                Message(
-                    text=f"Printing {material_name}: nozzle {nozzle_temp}C / bed {bed_temp}C - ensure clean bed, no drafts, door closed.",
-                    title="Robox - Material Advisory"
-                ).show()
-            elif nozzle_temp >= 240:
-                Message(
-                    text=f"Printing {material_name}: nozzle {nozzle_temp}C / bed {bed_temp}C - high temp, ensure good ventilation.",
-                    title="Robox - Material Advisory"
-                ).show()
-
-            # Default to single material head. Dual material only with 2 extruders.
             head_type = "RBX01-SM"
             if extruder_count > 1:
                 head_type = "RBX01-DM"
@@ -254,21 +276,28 @@ except Exception:
             for attempt in range(3):
                 try:
                     if self._proto:
-                        try: self._proto.disconnect()
-                        except: pass
+                        try:
+                            self._proto.disconnect()
+                        except Exception:
+                            pass
                     self._proto = RoboxProtocol()
                     self._proto.connect(self._port)
                     fw = self._proto.get_firmware_version().strip("\x00").strip()
                     Logger.log("i", f"Robox connected FW:{fw}")
 
-                    try: self._proto.abort_print()
-                    except: pass
-                    try: self._proto.clear_errors()
-                    except: pass
-                    try: self._proto.execute_gcode("G28 B")
-                    except: pass
+                    try:
+                        self._proto.abort_print()
+                    except Exception:
+                        pass
+                    try:
+                        self._proto.clear_errors()
+                    except Exception:
+                        pass
+                    try:
+                        self._proto.execute_gcode("G28 B")
+                    except Exception:
+                        pass
 
-                    # Auto-detect filament slot
                     try:
                         filament = self._proto.get_filament_status()
                         Logger.log("i", f"Filament: D(slot0)={filament['slot0_d']} E(slot1)={filament['slot1_e']}")
@@ -276,7 +305,6 @@ except Exception:
                             Logger.log("i", "Using nozzle 0 (D extruder, slot 0)")
                         elif filament["slot1_e"] and not filament["slot0_d"]:
                             Logger.log("i", "Using nozzle 1 (E extruder, slot 1)")
-                            # Re-process G-code with nozzle 1
                             pp2 = robox_postprocessor.PostProcessor(
                                 common, head_type=head_type,
                                 use_nozzle0=False, use_nozzle1=True,
@@ -290,21 +318,28 @@ except Exception:
                             self._total_lines = len(gcode_lines)
                             Logger.log("i", f"Re-processed for nozzle 1: {self._total_lines} lines")
                         elif filament["slot0_d"] and filament["slot1_e"]:
-                            Logger.log("i", "Both slots have filament - using nozzle 0 (D extruder)")
+                            Logger.log("i", "Both slots have filament - using nozzle 0")
                         else:
-                            Logger.log("w", "No filament detected in either slot")
+                            Logger.log("w", "No filament detected")
                     except Exception as e:
                         Logger.log("d", f"Filament detect: {e}")
 
-                    # Preheat - set BOTH standard and first-layer temps
-                    try: self._proto.execute_gcode(f"M104 S{nozzle_temp}")
-                    except: pass
-                    try: self._proto.execute_gcode(f"M103 S{nozzle_temp}")
-                    except: pass
-                    try: self._proto.execute_gcode(f"M140 S{bed_temp}")
-                    except: pass
-                    try: self._proto.execute_gcode(f"M139 S{bed_temp}")
-                    except: pass
+                    try:
+                        self._proto.execute_gcode(f"M104 S{nozzle_temp}")
+                    except Exception:
+                        pass
+                    try:
+                        self._proto.execute_gcode(f"M103 S{nozzle_temp}")
+                    except Exception:
+                        pass
+                    try:
+                        self._proto.execute_gcode(f"M140 S{bed_temp}")
+                    except Exception:
+                        pass
+                    try:
+                        self._proto.execute_gcode(f"M139 S{bed_temp}")
+                    except Exception:
+                        pass
                     if self._printers:
                         p = self._printers[0]
                         ex = p.extruders
@@ -324,9 +359,8 @@ except Exception:
                     if attempt < 2:
                         time.sleep(3)
 
-            self._proto.start_data_file(is_job=True)
+            self._proto.start_data_file()
 
-            # Update initial temps before upload so monitor shows them
             try:
                 t = self._proto.get_temperatures()
                 if t:
@@ -363,13 +397,11 @@ except Exception:
 
             self.writeFinished.emit(self)
 
-            # Monitor heating/progress while keeping UI responsive
-            # Use processEvents to keep Cura responsive during heating
             print_start = time.time()
             app = CuraApplication.getInstance()
             last_line = 0
             stable_count = 0
-            for _ in range(300):  # Max 10 minutes monitoring
+            for _ in range(300):
                 try:
                     t = self._proto.get_temperatures()
                     if t:
@@ -377,16 +409,6 @@ except Exception:
                         self._update_printer_model_temps(t)
                 except Exception:
                     pass
-
-                # Update elapsed time on the print job
-                try:
-                    if self._printers and hasattr(self._printers[0], '_active_print_job') and self._printers[0]._active_print_job:
-                        elapsed = int(time.time() - print_start)
-                        self._printers[0]._active_print_job.updateTimeElapsed(elapsed)
-                except Exception:
-                    pass
-
-                # Check if print completed (line number stopped changing)
                 try:
                     s = self._proto.get_status()
                     if s.print_line_number > 0:
@@ -395,18 +417,15 @@ except Exception:
                         else:
                             stable_count = 0
                         last_line = s.print_line_number
-                    if stable_count > 10:  # 20 seconds stable = print done
+                    if stable_count > 10:
                         Logger.log("i", f"Robox print completed at line {last_line}")
                         break
                 except Exception:
                     pass
-
-                # Keep UI responsive
                 if app:
                     app.processEvents()
                 time.sleep(2)
 
-            # After monitoring loop, restart QTimer for ongoing temp display
             self._start_monitor()
 
         except RoboxError as e:
@@ -423,7 +442,7 @@ except Exception:
             self._is_printing = False
 
     @pyqtSlot(str)
-    def sendCommand(self, command: str) -> None:
+    def sendCommand(self, command):
         try:
             cmd_upper = command.strip().upper()
             if cmd_upper == "PRINT":
@@ -440,67 +459,45 @@ except Exception:
                 self._proto.clear_errors()
                 return
             if any(cmd_upper.startswith(p) for p in ("G0", "G1", "G28", "G37", "G91", "G90")):
-                try: self._proto.execute_gcode("G28 B")
-                except: pass
+                try:
+                    self._proto.execute_gcode("G28 B")
+                except Exception:
+                    pass
             self._proto.execute_gcode(command)
         except Exception as e:
             Logger.log("d", f"Robox sendCommand: {e}")
 
-    def _update_printer_model_temps(self, t):
-        """Update Cura's printer model with current temperatures."""
-        try:
-            if not self._printers:
-                return
-            printer = self._printers[0]
-            if not printer:
-                return
-            extruders = printer.extruders
-            if extruders and len(extruders) > 0 and extruders[0]:
-                extruders[0].updateHotendTemperature(float(t.get("n0", 0)))
-                tn0 = t.get("target_n0")
-                if tn0 is not None:
-                    extruders[0].updateTargetHotendTemperature(float(tn0))
-            if extruders and len(extruders) > 1 and extruders[1]:
-                extruders[1].updateHotendTemperature(float(t.get("n1", 0)))
-                tn1 = t.get("target_n1")
-                if tn1 is not None:
-                    extruders[1].updateTargetHotendTemperature(float(tn1))
-            if printer:
-                printer.updateBedTemperature(float(t.get("bed", 0)))
-                tb = t.get("target_bed")
-                if tb is not None:
-                    printer.updateTargetBedTemperature(float(tb))
-        except Exception:
-            pass
-
-    def _stop_monitor(self):
-        if self._monitor_timer:
-            self._monitor_timer.stop()
-            self._monitor_timer = None
-
     def close(self):
         self._stop_monitor()
         if self._proto:
-            try: self._proto.disconnect()
-            except: pass
+            try:
+                self._proto.disconnect()
+            except Exception:
+                pass
         super().close()
 
     def pausePrint(self):
         if self._proto:
-            try: self._proto.pause_resume(pause=True)
-            except: pass
+            try:
+                self._proto.pause_resume(pause=True)
+            except Exception:
+                pass
 
     def resumePrint(self):
         if self._proto:
-            try: self._proto.pause_resume(pause=False)
-            except: pass
+            try:
+                self._proto.pause_resume(pause=False)
+            except Exception:
+                pass
 
     def cancelPrint(self):
         self._is_printing = False
         self._stop_monitor()
         if self._proto:
-            try: self._proto.abort_print()
-            except: pass
+            try:
+                self._proto.abort_print()
+            except Exception:
+                pass
 
 
 class RoboxOutputDevicePlugin(QObject, OutputDevicePlugin):
@@ -576,20 +573,12 @@ class RoboxOutputDevicePlugin(QObject, OutputDevicePlugin):
             for _ in range(50):
                 if not self._check_updates:
                     break
-                try: time.sleep(0.1)
-                except: break
+                try:
+                    time.sleep(0.1)
+                except Exception:
+                    break
 
     def stop(self):
         self._check_updates = False
         if self._device:
             self._device.close()
-
-
-
-
-
-
-
-
-
-
