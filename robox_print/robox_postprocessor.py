@@ -132,6 +132,11 @@ class Macros:
                 for line in f:
                     stripped = line.strip()
                     if stripped.startswith(MACRO_PREFIX):
+                        sub_macro_name = stripped.replace(MACRO_PREFIX, "").strip()
+                        if "#N0" in sub_macro_name and not self.use_nozzle0:
+                            continue
+                        if "#N1" in sub_macro_name and not self.use_nozzle1:
+                            continue
                         sub = self.get_contents(stripped, _expanding)
                         lines.extend(sub)
                     else:
@@ -180,21 +185,31 @@ class PostProcessor:
         lines.append(f"; Nozzle0: {self.use_nozzle0}, Nozzle1: {self.use_nozzle1}")
         lines.append("")
 
-        # Set temperatures BEFORE macros so M139/M103 use the correct values
-        # M139 = first layer bed temp, M140 = standard bed temp
-        # M103 = first layer nozzle temp, M104 = standard nozzle temp
-        lines.append(f"M140 S{self.bed_temp}")
-        lines.append(f"M139 S{self.bed_temp}")
-        lines.append(f"M104 S{self.nozzle_temp}")
-        lines.append(f"M103 S{self.nozzle_temp}")
-        lines.append("")
+        before_print_lines = mac.get_before_print()
+        for i, line in enumerate(before_print_lines):
+            command_part = line.split(';')[0].strip()
+            command_upper = command_part.upper()
 
-        # Before-print macros (now M139/M103 will use the values we just set)
-        lines.extend(mac.get_before_print())
+            # Set temperatures
+            if command_upper.startswith("M139") and "S" not in command_upper:
+                before_print_lines[i] = f"M139 S{self.bed_temp}"
+            elif command_upper.startswith("M103") and "S" not in command_upper and "T" not in command_upper:
+                before_print_lines[i] = f"M103 S{self.nozzle_temp}"
+            elif command_upper.startswith("M140") and "S" not in command_upper:
+                before_print_lines[i] = f"M140 S{self.bed_temp}"
+            elif command_upper.startswith("M104") and "S" not in command_upper and "T" not in command_upper:
+                before_print_lines[i] = f"M104 S{self.nozzle_temp}"
+
+            # Remap T0/T1 to the correct filament path
+            if command_upper.startswith("T0") and not self.use_nozzle0 and self.use_nozzle1:
+                before_print_lines[i] = "T1"
+            elif command_upper.startswith("T1") and not self.use_nozzle1 and self.use_nozzle0:
+                before_print_lines[i] = "T0"
+
+        lines.extend(before_print_lines)
         lines.append("")
 
         # Track tool state for nozzle open/close
-        # Default to tool 0 (D extruder) for single-material prints
         current_tool = 0 if not self.use_nozzle1 or self.use_nozzle0 else 1
         first_tool = True
 
@@ -209,9 +224,18 @@ class PostProcessor:
             m = self.TOOL_PATTERN.match(stripped)
             if m:
                 new_tool = int(m.group(1))
+                
+                # Remap T commands to the correct filament path
+                if new_tool == 0 and not self.use_nozzle0 and self.use_nozzle1:
+                    new_tool = 1
+                    stripped = "T1"
+                elif new_tool == 1 and not self.use_nozzle1 and self.use_nozzle0:
+                    new_tool = 0
+                    stripped = "T0"
+                
                 if current_tool is not None and new_tool != current_tool:
-                    lines.append("G0 B0")  # Close current nozzle
-                    lines.append("G0 B1")  # Open new nozzle
+                    lines.append("G0 B0")
+                    lines.append("G0 B1")
                 current_tool = new_tool
 
             # Map Tn -> extrusion type for D/E

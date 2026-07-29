@@ -31,6 +31,7 @@ CMD_SET_TEMPERATURES    = 0xC3
 CMD_SET_AMBIENT_LED     = 0xC2
 CMD_CLEAR_ERRORS        = 0xC0
 CMD_REPORT_ERRORS       = 0xB3
+CMD_READ_HEAD_EEPROM    = 0xA1
 
 # RX response bytes  (all have bit 7 set)
 RSP_ACK            = 0xE3
@@ -357,11 +358,37 @@ class RoboxProtocol:
             pass
         return True
 
+    def get_head_type(self):
+        """Read the head type string from the head EEPROM.
+        Sends [0xA1], expects HEAD_EEPROM response (0xE2) with ASCII name."""
+        CMD_READ_HEAD_EEPROM = 0xA1
+        with self._lock:
+            self._send(bytes([CMD_READ_HEAD_EEPROM]))
+            data = self._recv(128)
+            if data[0] != RSP_HEAD_EEPROM:
+                raise RoboxError(f"Expected head EEPROM 0x{RSP_HEAD_EEPROM:02X}, got 0x{data[0]:02X}")
+            name = data[1:9].decode("ascii", errors="replace").strip("\x00").strip()
+            return name
+
     def clear_errors(self):
         """Clear all firmware error flags. Sends [0xC0], expects ACK."""
         with self._lock:
             self._send(bytes([CMD_CLEAR_ERRORS]))
             return self._read_ack()
+
+    def report_errors(self):
+        """Query firmware error flags. Sends [0xB3], expects ACK with 64 error bits."""
+        with self._lock:
+            self._send(bytes([CMD_REPORT_ERRORS]))
+            data = self._recv(ACK_PACKET_SIZE)
+            if data[0] != RSP_ACK:
+                raise RoboxError(f"Expected ACK 0x{RSP_ACK:02X}, got 0x{data[0]:02X}")
+            error_bits = data[1:65].decode("ascii", errors="replace")
+            errors = []
+            for i, bit in enumerate(error_bits):
+                if bit == '1':
+                    errors.append(i)
+            return errors
 
     def pause_resume(self, pause=True):
         """Pause or resume the current print job.
