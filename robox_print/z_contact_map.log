@@ -1,0 +1,17 @@
+
+=== X=-14 (LEFT) ===
+  Z at bottom, X at LEFT
+  Z->88.0: settled 88.0 | *** CONTACT ***
+  RESULT LEFT: contact at Z=88.0
+
+=== X=105 (CENTER) ===
+  Z at bottom, X at CENTER
+  Z->90.0: settled 90.0 | *** CONTACT ***
+  RESULT CENTER: contact at Z=90.0
+
+=== X=212 (RIGHT) ===
+  Z at bottom, X at RIGHT
+  Z->88.0: settled 88.0 | *** CONTACT ***
+  RESULT RIGHT: contact at Z=88.0
+
+Errors: []

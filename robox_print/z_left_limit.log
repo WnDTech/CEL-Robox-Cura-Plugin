@@ -1,0 +1,18 @@
+=== X AT LEFT LIMIT ===
+X:-14.0 Y:74.998 Z:5.0 B:0.0 T:0 | M119 X:0 Y:0 Z:1 Z+:0 E:0 D:0 B:1 Eindex:1 Dindex:1
+Z settled at bottom: 0.0
+
+=== RAISING Z, polling until settled, watching Z+ ===
+Z target 78.0: settled at Z=78.0 | Z+ clear
+Z target 80.0: settled at Z=80.0 | Z+ clear
+Z target 82.0: settled at Z=82.0 | Z+ clear
+Z target 84.0: settled at Z=84.0 | Z+ clear
+Z target 86.0: settled at Z=86.0 | Z+ clear
+Z target 88.0: settled at Z=88.0 | *** Z+ TRIPPED (LID CONTACT) ***
+
+*** LID ARM CONTACT AT Z=88.0mm WITH X AT LEFT ***
+
+=== LOWERING Z TO 20mm ===
+Errors: []
+
+RESULT: contact at Z=88.0, safe Z cap at X-left = 78.0mm

@@ -32,6 +32,13 @@ CMD_SET_AMBIENT_LED     = 0xC2
 CMD_CLEAR_ERRORS        = 0xC0
 CMD_REPORT_ERRORS       = 0xB3
 CMD_READ_HEAD_EEPROM    = 0xA1
+CMD_READ_REEL0_EEPROM   = 0xA3
+CMD_READ_REEL1_EEPROM   = 0xA5
+CMD_SET_AMBIENT_LED     = 0xC2
+CMD_SET_BUTTON_LED      = 0xC5
+CMD_SET_HEAD_POWER      = 0xCA
+CMD_SET_E_FEED_RATE_MULTIPLIER = 0xC7
+CMD_SET_D_FEED_RATE_MULTIPLIER = 0xC4
 
 # RX response bytes  (all have bit 7 set)
 RSP_ACK            = 0xE3
@@ -40,12 +47,15 @@ RSP_PRINTER_ID     = 0xE5
 RSP_STATUS         = 0xE1
 RSP_GCODE          = 0xE7
 RSP_HEAD_EEPROM    = 0xE2
+RSP_REEL0_EEPROM   = 0xE6
+RSP_REEL1_EEPROM   = 0xE8
 
 # Fixed RX packet sizes (firmware >= 768)
 FW_VER_PACKET_SIZE = 9       # 1 type + 8 ASCII chars
 PRINTER_ID_SIZE    = 257     # 1 type + 256 data
 STATUS_PACKET_SIZE = 222     # for firmware >= 768
 ACK_PACKET_SIZE    = 65      # 1 type + 64 error bits as '0'/'1' chars
+EEPROM_PACKET_SIZE = 193     # 1 type + 192 bytes (EEPROM_VIRTUAL_LENGTH = 0xC0)
 
 # Firmware error bit positions
 CRITICAL_ERRORS = {
@@ -416,6 +426,77 @@ class RoboxProtocol:
             payload = " ".join(parts).encode("ascii")
             self._send(bytes([CMD_SET_TEMPERATURES]) + payload)
             return self._read_ack()
+
+    def set_ambient_led(self, r, g, b):
+        """Set the ambient (enclosure) LED colour. Sends [0xC2] + 6 hex chars
+        (RRGGBB), expects ACK."""
+        with self._lock:
+            payload = f"{r:02x}{g:02x}{b:02x}".encode("ascii")
+            self._send(bytes([CMD_SET_AMBIENT_LED]) + payload)
+            return self._read_ack()
+
+    def set_button_led(self, r, g, b):
+        """Set the front button LED colour. Sends [0xC5] + 6 hex chars
+        (RRGGBB), expects ACK."""
+        with self._lock:
+            payload = f"{r:02x}{g:02x}{b:02x}".encode("ascii")
+            self._send(bytes([CMD_SET_BUTTON_LED]) + payload)
+            return self._read_ack()
+
+    def set_head_power(self, on):
+        """Set head power on/off. Sends [0xCA] + '1'/'0', expects ACK."""
+        with self._lock:
+            self._send(bytes([CMD_SET_HEAD_POWER]) + (b"1" if on else b"0"))
+            return self._read_ack()
+
+    def set_feed_rate_multiplier(self, extruder, multiplier):
+        """Set feed rate multiplier for E (0) or D (1) extruder.
+        Sends [0xC7]/[0xC4] + 8-char ASCII float, expects ACK."""
+        cmd = CMD_SET_D_FEED_RATE_MULTIPLIER if extruder else CMD_SET_E_FEED_RATE_MULTIPLIER
+        with self._lock:
+            payload = f"{float(multiplier):8.4f}".encode("ascii")[:8]
+            self._send(bytes([cmd]) + payload)
+            return self._read_ack()
+
+    def get_reel_eeprom(self, reel):
+        """Read a reel EEPROM (reel=0 for slot 0/D, reel=1 for slot 1/E).
+        Sends [0xA3]/[0xA5], expects the reel EEPROM report (192 data bytes).
+        Returns the raw EEPROM bytes, or None if the reel is not present."""
+        cmd = CMD_READ_REEL1_EEPROM if reel else CMD_READ_REEL0_EEPROM
+        rsp = RSP_REEL1_EEPROM if reel else RSP_REEL0_EEPROM
+        with self._lock:
+            self._send(bytes([cmd]))
+            data = self._recv(EEPROM_PACKET_SIZE)
+            if data[0] != rsp:
+                raise RoboxError(f"Expected reel EEPROM 0x{rsp:02X}, got 0x{data[0]:02X}")
+            return data[1:]
+
+    def get_reel_temperatures(self, reel):
+        """Read nozzle/bed/ambient target temperatures from a reel EEPROM.
+        Layout (firmware heaters.c get_nozzle_targets_from_reel /
+        get_bed_targets_from_reel):
+          nozzle first layer 0x28, nozzle normal 0x30
+          bed first layer 0x38, bed normal 0x40
+          ambient 0x48
+        Returns dict or None if reel absent."""
+        try:
+            data = self.get_reel_eeprom(reel)
+        except Exception:
+            return None
+        if not data or len(data) < 0x50:
+            return None
+        def f(addr):
+            try:
+                return float(data[addr:addr+8].decode("ascii", errors="replace").strip() or 0)
+            except Exception:
+                return 0.0
+        return {
+            "nozzle_first_layer": f(0x28),
+            "nozzle": f(0x30),
+            "bed_first_layer": f(0x38),
+            "bed": f(0x40),
+            "ambient": f(0x48),
+        }
 
 
 class StatusResponse:

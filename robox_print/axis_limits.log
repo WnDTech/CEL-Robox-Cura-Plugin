@@ -1,0 +1,35 @@
+=== SETUP: Home Y and Z (switches work), skip X (faulty switch) ===
+  G28 Y: X:100.001 Y:-4.0 Z:5.0 B:0.0 T:0 | M119 X:0 Y:1 Z:0 Z+:0 E:0 D:0 B:1 Eindex:1 Dindex:1
+  G28 Z: X:100.001 Y:-4.0 Z:0.0 B:0.0 T:0 | M119 X:0 Y:1 Z:0 Z+:0 E:0 D:0 B:1 Eindex:1 Dindex:1
+
+=== X AXIS LIMITS (no working home switch - using firmware clamps) ===
+Firmware: travel[X]=226, tool_offset[X]=14 -> nozzle range [-14, 212]
+  X start (50): X:50.001 Y:74.998 Z:5.0 B:0.0 T:0 | M119 X:0 Y:0 Z:0 Z+:0 E:0 D:0 B:1 Eindex:0 Dindex:1
+Driving X LEFT (nozzle -14 = carriage 0)...
+  X left limit: X:-14.0 Y:74.998 Z:5.0 B:0.0 T:0 | M119 X:0 Y:0 Z:0 Z+:0 E:0 D:0 B:1 Eindex:0 Dindex:1
+  X switch NOT tripped (faulty) - relying on clamp
+Driving X RIGHT (nozzle 212 = carriage 226)...
+  X right limit: X:211.999 Y:74.998 Z:5.0 B:0.0 T:0 | M119 X:0 Y:0 Z:0 Z+:0 E:0 D:0 B:1 Eindex:0 Dindex:1
+
+=== Y AXIS LIMITS (switch works) ===
+Firmware: travel[Y]=155, tool_offset[Y]=4 -> nozzle range [-4, 151]
+  Y start (50): X:100.002 Y:50.002 Z:5.0 B:0.0 T:0 | M119 X:0 Y:0 Z:0 Z+:0 E:0 D:0 B:1 Eindex:0 Dindex:1
+Driving Y FRONT (nozzle -4 = carriage 0)...
+  Y front limit: X:100.002 Y:-4.0 Z:5.0 B:0.0 T:0 | M119 X:0 Y:1 Z:0 Z+:0 E:0 D:0 B:1 Eindex:0 Dindex:1
+  Y switch TRIPPED at front limit
+Driving Y BACK (nozzle 151 = carriage 155)...
+  Y back limit: X:100.002 Y:150.997 Z:5.0 B:0.0 T:0 | M119 X:0 Y:0 Z:0 Z+:0 E:0 D:0 B:1 Eindex:0 Dindex:1
+
+=== Z AXIS LIMITS (switch works, top switch at 79) ===
+Firmware: travel[Z]=100.2, z_top_switch_min=79, safe max 75
+  Z start (5): X:100.002 Y:74.998 Z:5.0 B:0.0 T:0 | M119 X:0 Y:0 Z:0 Z+:0 E:0 D:0 B:1 Eindex:0 Dindex:1
+Driving Z BOTTOM...
+  Z bottom: X:100.002 Y:74.998 Z:0.0 B:0.0 T:0 | M119 X:0 Y:0 Z:0 Z+:0 E:0 D:0 B:1 Eindex:0 Dindex:1
+Driving Z TOP (capped at 75 by plugin post-processor)...
+  Z top (75): X:100.002 Y:74.998 Z:33.438 B:0.0 T:0 | M119 X:0 Y:0 Z:0 Z+:0 E:0 D:0 B:1 Eindex:0 Dindex:1
+  Z+ top switch clear at Z=75 (good)
+
+=== RETURN TO SAFE ===
+  Safe position: X:100.002 Y:74.998 Z:51.25 B:0.0 T:0 | M119 X:0 Y:0 Z:0 Z+:0 E:0 D:0 B:1 Eindex:0 Dindex:1
+
+Final errors: []

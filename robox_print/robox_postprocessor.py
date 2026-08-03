@@ -200,11 +200,22 @@ class PostProcessor:
             elif command_upper.startswith("M104") and "S" not in command_upper and "T" not in command_upper:
                 before_print_lines[i] = f"M104 S{self.nozzle_temp}"
 
-            # Remap T0/T1 to the correct filament path
-            if command_upper.startswith("T0") and not self.use_nozzle0 and self.use_nozzle1:
-                before_print_lines[i] = "T1"
-            elif command_upper.startswith("T1") and not self.use_nozzle1 and self.use_nozzle0:
-                before_print_lines[i] = "T0"
+            # Keep T0 (tool 0) - it sets correct tool offsets from head EEPROM.
+            # On SM heads, tool-1 EEPROM offsets are unprogrammed and corrupt
+            # homing (Z reads 90mm -> Z crashes into lid). T0 is harmless now
+            # that the B axis gate is free.
+            if command_upper.startswith("T1"):
+                before_print_lines[i] = ""
+                continue
+
+            # X home switch is FAULTY (does not trip). G28 X makes home_axis()
+            # grind the motor until the abandon counter (339mm) expires - the
+            # head bangs into the left wall. Replace with a clamped move to
+            # X-100: the firmware clamps carriage to [0,226] (nozzle -14),
+            # so this safely drives to the left stop without grinding.
+            if command_upper.startswith("G28 X"):
+                before_print_lines[i] = "G0 X-100 F1500"
+                continue
 
         lines.extend(before_print_lines)
         lines.append("")
@@ -212,6 +223,7 @@ class PostProcessor:
         # Track tool state for nozzle open/close
         current_tool = 0 if not self.use_nozzle1 or self.use_nozzle0 else 1
         first_tool = True
+        last_x = 0.0
 
         for raw_line in input_gcode.split("\n"):
             stripped = raw_line.strip()
@@ -220,29 +232,72 @@ class PostProcessor:
                 lines.append(stripped)
                 continue
 
-            # Detect tool change
+            # Detect tool change - keep T0 (correct offsets), strip T1 (garbage offsets on SM)
             m = self.TOOL_PATTERN.match(stripped)
             if m:
                 new_tool = int(m.group(1))
-                
-                # Remap T commands to the correct filament path
-                if new_tool == 0 and not self.use_nozzle0 and self.use_nozzle1:
-                    new_tool = 1
-                    stripped = "T1"
-                elif new_tool == 1 and not self.use_nozzle1 and self.use_nozzle0:
-                    new_tool = 0
-                    stripped = "T0"
-                
-                if current_tool is not None and new_tool != current_tool:
-                    lines.append("G0 B0")
-                    lines.append("G0 B1")
-                current_tool = new_tool
+                if new_tool == 1:
+                    continue
+
+            # Replace G28 X anywhere in the gcode - X home switch is faulty,
+            # firmware would grind 339mm into the left wall. Use clamped move.
+            if stripped.upper().startswith("G28 X"):
+                stripped = "G0 X-100 F1500"
 
             # Map Tn -> extrusion type for D/E
             if current_tool == 0:
                 stripped = re.sub(r" E(-?[0-9.]+\s*E)?", " D", stripped)
             elif current_tool == 1:
                 stripped = re.sub(r" D(-?[0-9.]+\s*D)?", " E", stripped)
+
+            # Clamp axis moves to measured physical limits (nozzle coordinates,
+            # from axis_limits.log measurement on this machine):
+            #   X: [-14, 212]  (carriage [0, 226], tool offset 14; X home switch
+            #                   is FAULTY so we must not rely on it - G28 X is
+            #                   replaced with a clamped move in before_print)
+            #   Y: [-4, 151]   (carriage [0, 155], tool offset 4)
+            #   Z: [0, 75]     (above 79 the head presses the lid arm; firmware
+            #                   only reports ERROR_Z_TOP_SWITCH, does not stop)
+            # COUPLED X+Z limit (measured z_contact_map.log 2026-07-31):
+            #   The head hits the lid mounting bracket at the top-LEFT corner.
+            #   Z+ top switch contact measured at: X=-14 -> 88mm, X=105 -> 90mm,
+            #   X=212 -> 88mm. With the head at the X left limit, Z must be
+            #   capped lower. Safe envelope: for X < 0, cap Z at 40mm; for
+            #   X >= 0, cap Z at 75mm. This prevents the top-left bracket hit.
+            if stripped.startswith(("G0", "G1")):
+                m = re.search(r"\bX(-?[0-9.]+)", stripped)
+                if m:
+                    x_val = float(m.group(1))
+                    if x_val > 212.0:
+                        stripped = stripped.replace(m.group(0), "X212.0")
+                    elif x_val < -14.0:
+                        stripped = stripped.replace(m.group(0), "X-14.0")
+                m = re.search(r"\bY(-?[0-9.]+)", stripped)
+                if m:
+                    y_val = float(m.group(1))
+                    if y_val > 151.0:
+                        stripped = stripped.replace(m.group(0), "Y151.0")
+                    elif y_val < -4.0:
+                        stripped = stripped.replace(m.group(0), "Y-4.0")
+                m = re.search(r"\bZ(-?[0-9.]+)", stripped)
+                if m:
+                    z_val = float(m.group(1))
+                    # Coupled limit: when X is at the left, Z is capped lower
+                    # (lid mounting bracket collision at top-left corner)
+                    if "X" in stripped:
+                        xm = re.search(r"\bX(-?[0-9.]+)", stripped)
+                        current_x = float(xm.group(1)) if xm else 0.0
+                    else:
+                        current_x = last_x
+                    z_max = 40.0 if current_x < 0.0 else 75.0
+                    if z_val > z_max:
+                        stripped = stripped.replace(m.group(0), f"Z{z_max:.1f}")
+                    elif z_val < 0.0:
+                        stripped = stripped.replace(m.group(0), "Z0.0")
+                # Track X position for coupled Z clamp on moves without X
+                mx = re.search(r"\bX(-?[0-9.]+)", stripped)
+                if mx:
+                    last_x = float(mx.group(1))
 
             lines.append(stripped)
 

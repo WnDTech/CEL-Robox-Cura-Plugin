@@ -1,0 +1,15 @@
+=== BUTTON AUDIT (start at X105 Y75 Z5) ===
+1. Jog X+100: X=205.0 (expect ~205)
+2. Jog X+100 again: X=212.0 (expect 212 clamp)
+3. Jog X-1000: X=-14.0 (expect -14 clamp)
+4. Jog Z+100 at left: X=-14.0 Z=40.0 (expect Z=40 clamp)
+5. Jog Z+100 center: Z=75.0 (expect 75 clamp)
+6. Jog Y+100: Y=151.0 (expect 151 clamp)
+7. Jog Y-1000: Y=-4.0 (expect -4 clamp)
+8. Home (G28 X Y) - safe sequence...
+8. After home: X=105.0 Y=-4.0
+9. Temps set (M104 S210, M140 S60) - no NOZZLE1_THERMISTOR expected
+   Errors: []
+10. Cool down sent
+
+FINAL Errors: []
