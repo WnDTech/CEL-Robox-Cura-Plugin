@@ -132,6 +132,11 @@ class Macros:
                 for line in f:
                     stripped = line.strip()
                     if stripped.startswith(MACRO_PREFIX):
+                        sub_macro_name = stripped.replace(MACRO_PREFIX, "").strip()
+                        if "#N0" in sub_macro_name and not self.use_nozzle0:
+                            continue
+                        if "#N1" in sub_macro_name and not self.use_nozzle1:
+                            continue
                         sub = self.get_contents(stripped, _expanding)
                         lines.extend(sub)
                     else:
@@ -180,23 +185,45 @@ class PostProcessor:
         lines.append(f"; Nozzle0: {self.use_nozzle0}, Nozzle1: {self.use_nozzle1}")
         lines.append("")
 
-        # Set temperatures BEFORE macros so M139/M103 use the correct values
-        # M139 = first layer bed temp, M140 = standard bed temp
-        # M103 = first layer nozzle temp, M104 = standard nozzle temp
-        lines.append(f"M140 S{self.bed_temp}")
-        lines.append(f"M139 S{self.bed_temp}")
-        lines.append(f"M104 S{self.nozzle_temp}")
-        lines.append(f"M103 S{self.nozzle_temp}")
-        lines.append("")
+        before_print_lines = mac.get_before_print()
+        for i, line in enumerate(before_print_lines):
+            command_part = line.split(';')[0].strip()
+            command_upper = command_part.upper()
 
-        # Before-print macros (now M139/M103 will use the values we just set)
-        lines.extend(mac.get_before_print())
+            # Set temperatures
+            if command_upper.startswith("M139") and "S" not in command_upper:
+                before_print_lines[i] = f"M139 S{self.bed_temp}"
+            elif command_upper.startswith("M103") and "S" not in command_upper and "T" not in command_upper:
+                before_print_lines[i] = f"M103 S{self.nozzle_temp}"
+            elif command_upper.startswith("M140") and "S" not in command_upper:
+                before_print_lines[i] = f"M140 S{self.bed_temp}"
+            elif command_upper.startswith("M104") and "S" not in command_upper and "T" not in command_upper:
+                before_print_lines[i] = f"M104 S{self.nozzle_temp}"
+
+            # Keep T0 (tool 0) - it sets correct tool offsets from head EEPROM.
+            # On SM heads, tool-1 EEPROM offsets are unprogrammed and corrupt
+            # homing (Z reads 90mm -> Z crashes into lid). T0 is harmless now
+            # that the B axis gate is free.
+            if command_upper.startswith("T1"):
+                before_print_lines[i] = ""
+                continue
+
+            # X home switch is FAULTY (does not trip). G28 X makes home_axis()
+            # grind the motor until the abandon counter (339mm) expires - the
+            # head bangs into the left wall. Replace with a clamped move to
+            # X-100: the firmware clamps carriage to [0,226] (nozzle -14),
+            # so this safely drives to the left stop without grinding.
+            if command_upper.startswith("G28 X"):
+                before_print_lines[i] = "G0 X-100 F1500"
+                continue
+
+        lines.extend(before_print_lines)
         lines.append("")
 
         # Track tool state for nozzle open/close
-        # Default to tool 0 (D extruder) for single-material prints
         current_tool = 0 if not self.use_nozzle1 or self.use_nozzle0 else 1
         first_tool = True
+        last_x = 0.0
 
         for raw_line in input_gcode.split("\n"):
             stripped = raw_line.strip()
@@ -205,20 +232,72 @@ class PostProcessor:
                 lines.append(stripped)
                 continue
 
-            # Detect tool change
+            # Detect tool change - keep T0 (correct offsets), strip T1 (garbage offsets on SM)
             m = self.TOOL_PATTERN.match(stripped)
             if m:
                 new_tool = int(m.group(1))
-                if current_tool is not None and new_tool != current_tool:
-                    lines.append("G0 B0")  # Close current nozzle
-                    lines.append("G0 B1")  # Open new nozzle
-                current_tool = new_tool
+                if new_tool == 1:
+                    continue
+
+            # Replace G28 X anywhere in the gcode - X home switch is faulty,
+            # firmware would grind 339mm into the left wall. Use clamped move.
+            if stripped.upper().startswith("G28 X"):
+                stripped = "G0 X-100 F1500"
 
             # Map Tn -> extrusion type for D/E
             if current_tool == 0:
                 stripped = re.sub(r" E(-?[0-9.]+\s*E)?", " D", stripped)
             elif current_tool == 1:
                 stripped = re.sub(r" D(-?[0-9.]+\s*D)?", " E", stripped)
+
+            # Clamp axis moves to measured physical limits (nozzle coordinates,
+            # from axis_limits.log measurement on this machine):
+            #   X: [-14, 212]  (carriage [0, 226], tool offset 14; X home switch
+            #                   is FAULTY so we must not rely on it - G28 X is
+            #                   replaced with a clamped move in before_print)
+            #   Y: [-4, 151]   (carriage [0, 155], tool offset 4)
+            #   Z: [0, 75]     (above 79 the head presses the lid arm; firmware
+            #                   only reports ERROR_Z_TOP_SWITCH, does not stop)
+            # COUPLED X+Z limit (measured z_contact_map.log 2026-07-31):
+            #   The head hits the lid mounting bracket at the top-LEFT corner.
+            #   Z+ top switch contact measured at: X=-14 -> 88mm, X=105 -> 90mm,
+            #   X=212 -> 88mm. With the head at the X left limit, Z must be
+            #   capped lower. Safe envelope: for X < 0, cap Z at 40mm; for
+            #   X >= 0, cap Z at 75mm. This prevents the top-left bracket hit.
+            if stripped.startswith(("G0", "G1")):
+                m = re.search(r"\bX(-?[0-9.]+)", stripped)
+                if m:
+                    x_val = float(m.group(1))
+                    if x_val > 212.0:
+                        stripped = stripped.replace(m.group(0), "X212.0")
+                    elif x_val < -14.0:
+                        stripped = stripped.replace(m.group(0), "X-14.0")
+                m = re.search(r"\bY(-?[0-9.]+)", stripped)
+                if m:
+                    y_val = float(m.group(1))
+                    if y_val > 151.0:
+                        stripped = stripped.replace(m.group(0), "Y151.0")
+                    elif y_val < -4.0:
+                        stripped = stripped.replace(m.group(0), "Y-4.0")
+                m = re.search(r"\bZ(-?[0-9.]+)", stripped)
+                if m:
+                    z_val = float(m.group(1))
+                    # Coupled limit: when X is at the left, Z is capped lower
+                    # (lid mounting bracket collision at top-left corner)
+                    if "X" in stripped:
+                        xm = re.search(r"\bX(-?[0-9.]+)", stripped)
+                        current_x = float(xm.group(1)) if xm else 0.0
+                    else:
+                        current_x = last_x
+                    z_max = 40.0 if current_x < 0.0 else 75.0
+                    if z_val > z_max:
+                        stripped = stripped.replace(m.group(0), f"Z{z_max:.1f}")
+                    elif z_val < 0.0:
+                        stripped = stripped.replace(m.group(0), "Z0.0")
+                # Track X position for coupled Z clamp on moves without X
+                mx = re.search(r"\bX(-?[0-9.]+)", stripped)
+                if mx:
+                    last_x = float(mx.group(1))
 
             lines.append(stripped)
 

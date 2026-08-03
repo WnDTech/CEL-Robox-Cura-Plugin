@@ -2,7 +2,7 @@
 ; Inno Setup 6 script
 
 #define MyAppName "CEL Robox Cura Integration"
-#define MyAppVersion "2.0.0"
+#define MyAppVersion "1.2.0"
 #define MyAppPublisher "CEL-UK / Community"
 #define MyAppURL "https://github.com/celsworthy"
 

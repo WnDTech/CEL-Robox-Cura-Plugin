@@ -30,8 +30,65 @@ Component
 
             Cura.SecondaryButton
             {
+                id: purgeButton
+                anchors.bottom: ejectButton.top
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.leftMargin: UM.Theme.getSize("default_margin").width
+                anchors.rightMargin: UM.Theme.getSize("default_margin").width
+                anchors.bottomMargin: UM.Theme.getSize("default_margin").height
+                text: "Purge Nozzle"
+                visible: Cura.MachineManager.printerOutputDevices.length > 0
+                onClicked: {
+                    var device = Cura.MachineManager.printerOutputDevices[0]
+                    if (device) {
+                        device.sendCommand("PURGE_NOZZLE")
+                    }
+                }
+            }
+
+            Cura.SecondaryButton
+            {
+                id: ejectButton
+                anchors.bottom: removeHeadButton.top
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.leftMargin: UM.Theme.getSize("default_margin").width
+                anchors.rightMargin: UM.Theme.getSize("default_margin").width
+                anchors.bottomMargin: UM.Theme.getSize("default_margin").height
+                text: "Eject Stuck Filament"
+                visible: Cura.MachineManager.printerOutputDevices.length > 0
+                onClicked: {
+                    var device = Cura.MachineManager.printerOutputDevices[0]
+                    if (device) {
+                        device.sendCommand("EJECT_STUCK_MATERIAL")
+                    }
+                }
+            }
+
+            Cura.SecondaryButton
+            {
+                id: removeHeadButton
+                anchors.bottom: loadButton.top
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.leftMargin: UM.Theme.getSize("default_margin").width
+                anchors.rightMargin: UM.Theme.getSize("default_margin").width
+                anchors.bottomMargin: UM.Theme.getSize("default_margin").height
+                text: "Remove Head"
+                visible: Cura.MachineManager.printerOutputDevices.length > 0
+                onClicked: {
+                    var device = Cura.MachineManager.printerOutputDevices[0]
+                    if (device) {
+                        device.sendCommand("REMOVE_HEAD")
+                    }
+                }
+            }
+
+            Cura.SecondaryButton
+            {
                 id: printButton
-                anchors.bottom: coolDownButton.top
+                anchors.bottom: purgeButton.top
                 anchors.left: parent.left
                 anchors.right: parent.right
                 anchors.leftMargin: UM.Theme.getSize("default_margin").width
@@ -43,6 +100,44 @@ Component
                     var device = Cura.MachineManager.printerOutputDevices[0]
                     if (device) {
                         device.sendCommand("PRINT")
+                    }
+                }
+            }
+
+            Cura.SecondaryButton
+            {
+                id: loadButton
+                anchors.bottom: unloadButton.top
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.leftMargin: UM.Theme.getSize("default_margin").width
+                anchors.rightMargin: UM.Theme.getSize("default_margin").width
+                anchors.bottomMargin: UM.Theme.getSize("default_margin").height
+                text: "Load Filament"
+                visible: Cura.MachineManager.printerOutputDevices.length > 0
+                onClicked: {
+                    var device = Cura.MachineManager.printerOutputDevices[0]
+                    if (device) {
+                        device.sendCommand("LOAD_FILAMENT")
+                    }
+                }
+            }
+
+            Cura.SecondaryButton
+            {
+                id: unloadButton
+                anchors.bottom: coolDownButton.top
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.leftMargin: UM.Theme.getSize("default_margin").width
+                anchors.rightMargin: UM.Theme.getSize("default_margin").width
+                anchors.bottomMargin: UM.Theme.getSize("default_margin").height
+                text: "Unload Filament"
+                visible: Cura.MachineManager.printerOutputDevices.length > 0
+                onClicked: {
+                    var device = Cura.MachineManager.printerOutputDevices[0]
+                    if (device) {
+                        device.sendCommand("UNLOAD_FILAMENT")
                     }
                 }
             }
